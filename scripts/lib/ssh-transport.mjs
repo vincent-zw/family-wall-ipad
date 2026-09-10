@@ -107,7 +107,7 @@ function makeTransport(service) {
       if (isDiscovery) {
         // SSH 返回裸 v0 advertisement，补上 HTTP smart 协议的 service 头（长度按实际字节计算）
         const line = `# service=${service}\n`;
-        const head = Buffer.from(`${String(4 + Buffer.byteLength(line)).padStart(4, "0")}${line}0000`, "ascii");
+        const head = Buffer.from(`${(4 + Buffer.byteLength(line)).toString(16).padStart(4, "0")}${line}0000`, "ascii");
         return httpResponse({ url, body: Buffer.concat([head, advert]), contentType: `application/x-${mime}-advertisement` });
       }
       if (stderr && !data.length) throw new Error(`GitHub 返回错误: ${stderr}`);
