@@ -1,0 +1,9 @@
+{
+  "name": "family-wall-tts-worker",
+  "version": "1.0.0",
+  "private": true,
+  "main": "index.js",
+  "dependencies": {
+    "tencentcloud-sdk-nodejs-tts": "^4.1.31"
+  }
+}

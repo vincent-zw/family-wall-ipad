@@ -1,0 +1,99 @@
+{
+  "$schema": "https://static.cloudbase.net/cli/cloudbaserc.schema.json",
+  "version": "2.0",
+  "envId": "{{env.CLOUDBASE_ENV_ID}}",
+  "region": "ap-shanghai",
+  "functionRoot": "./functions",
+  "functions": [
+    {
+      "name": "wall-web",
+      "runtime": "Nodejs20.19",
+      "handler": "index.main",
+      "timeout": 10,
+      "memorySize": 128,
+      "installDependency": false,
+      "aclRule": {
+        "invoke": true
+      },
+      "triggers": [
+        {
+          "name": "wall-web-family-wall",
+          "type": "http",
+          "config": {
+            "paths": ["/family-wall"],
+            "methods": ["GET", "HEAD", "POST", "OPTIONS"],
+            "enableCORS": false,
+            "enableIntegrationResponse": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "family-api",
+      "runtime": "Nodejs20.19",
+      "handler": "index.main",
+      "timeout": 10,
+      "memorySize": 256,
+      "installDependency": true,
+      "aclRule": {
+        "invoke": true
+      },
+      "envVariables": {
+        "FAMILY_ACCESS_CODE": "{{env.FAMILY_ACCESS_CODE}}",
+        "TRTC_SDK_APP_ID": "1600159612",
+        "CLOUDBASE_ENV_ID": "{{env.CLOUDBASE_ENV_ID}}"
+      }
+    },
+    {
+      "name": "tts-worker",
+      "runtime": "Nodejs20.19",
+      "handler": "index.main",
+      "timeout": 60,
+      "memorySize": 256,
+      "installDependency": true,
+      "role": "SCF_QcsRole",
+      "aclRule": {
+        "invoke": true
+      },
+      "envVariables": {
+        "CLOUDBASE_ENV_ID": "{{env.CLOUDBASE_ENV_ID}}"
+      }
+    },
+    {
+      "name": "daily-english",
+      "runtime": "Nodejs20.19",
+      "handler": "index.main",
+      "timeout": 180,
+      "memorySize": 512,
+      "installDependency": true,
+      "triggers": [
+        {
+          "name": "prepare-next-week",
+          "type": "timer",
+          "config": "0 0 21 * * * *"
+        }
+      ],
+      "envVariables": {
+        "CLOUDBASE_ENV_ID": "{{env.CLOUDBASE_ENV_ID}}"
+      }
+    },
+    {
+      "name": "daily-dinner",
+      "runtime": "Nodejs20.19",
+      "handler": "index.main",
+      "timeout": 180,
+      "memorySize": 512,
+      "installDependency": true,
+      "triggers": [
+        {
+          "name": "prepare-dinner-news",
+          "type": "timer",
+          "config": "0 30 16 * * * *"
+        }
+      ],
+      "envVariables": {
+        "CLOUDBASE_ENV_ID": "{{env.CLOUDBASE_ENV_ID}}"
+      }
+    }
+  ]
+}
