@@ -25,11 +25,10 @@ async function main() {
   }
 
   // 2. 配置用户名和邮箱（如果还没有）
-  const name = process.env.GIT_AUTHOR_NAME || process.env.GIT_COMMITTER_NAME || "vincent";
-  const email = process.env.GIT_AUTHOR_EMAIL || process.env.GIT_COMMITTER_EMAIL || "vincent@users.noreply.github.com";
-  try {
-    await git.getConfig({ ...gitOpts, path: "user.name" });
-  } catch {
+  const name = process.env.GIT_AUTHOR_NAME || process.env.GIT_COMMITTER_NAME || "vincent-zw";
+  const email = process.env.GIT_AUTHOR_EMAIL || process.env.GIT_COMMITTER_EMAIL || "vincent-zw@users.noreply.github.com";
+  const existingName = await git.getConfig({ ...gitOpts, path: "user.name" }).catch(() => "");
+  if (!existingName) {
     await git.setConfig({ ...gitOpts, path: "user.name", value: name });
     await git.setConfig({ ...gitOpts, path: "user.email", value: email });
     console.log(`👤 已设置 user.name=${name}  user.email=${email}`);
