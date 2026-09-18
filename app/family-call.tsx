@@ -188,8 +188,88 @@ export function FamilyCall({ open, onOpenChange, request, onRequestChange, devic
   const clientRef = useRef<TRTCClient | null>(null);
   const ticketUserIdRef = useRef<string>("");
   const remoteUserUidRef = useRef<string>("");
+  // 最近一次"远端视频可用"事件的确定性参数（userId + streamType 以事件实际值为准，禁止猜数字）
+  const remoteVideoInfoRef = useRef<{ userId: string; streamType: string } | null>(null);
+  const streamTypeMainRef = useRef<string>("main");
   const lastRungIdRef = useRef("");
   const ringerRef = useRef<RingerHandle | null>(null);
+  const [remoteVideoState, setRemoteVideoState] = useState<"waiting" | "playing" | "failed">("waiting");
+  const [debugLines, setDebugLines] = useState<string[]>([]);
+  const [showDebug, setShowDebug] = useState(false);
+
+  const pushDebug = (line: string) => {
+    console.log("[TRTC]", line);
+    // 保留最近 20 条，避免早期关键事件被挤掉
+    setDebugLines((prev) => [...prev.slice(-19), `${new Date().toLocaleTimeString("zh-CN", { hour12: false })} ${line}`]);
+  };
+
+  const remoteVideoStartedRef = useRef(false);
+
+  /** 确认远端画面真实渲染：容器里出现 SDK 创建的 <video> 才算成功。
+   *  不信任 startRemoteVideo 的 resolve —— SDK 在“远端未发布视频”时会静默成功，
+   *  之前因此误置防重入标记，导致后来真实视频事件到达时被永久挡掉（黑屏根因）。 */
+  function remoteVideoInDom() {
+    return Boolean(document.getElementById("family-remote-video")?.querySelector("video"));
+  }
+
+  function ensureRemoteVideo(reason: string) {
+    const client = clientRef.current;
+    if (!client) return;
+    const el = document.getElementById("family-remote-video");
+    const info = remoteVideoInfoRef.current;
+    const uid = info?.userId ?? remoteUserUidRef.current;
+    if (!el || !uid) {
+      window.setTimeout(() => ensureRemoteVideo(reason), 200);
+      return;
+    }
+    if (remoteVideoInDom()) {
+      remoteVideoStartedRef.current = true;
+      setRemoteVideoState("playing");
+      pushDebug(`远端画面已在播放 ${reason}`);
+      return;
+    }
+    const streamType = info?.streamType ?? streamTypeMainRef.current;
+    if (remoteVideoStartedRef.current) {
+      // 之前误标成功但 video 没出现：SDK 内部状态与 DOM 不一致 → 先 stop 清状态再重绑
+      remoteVideoStartedRef.current = false;
+      pushDebug(`重置远端绑定 ${reason}`);
+      void client.stopRemoteVideo({ userId: uid, streamType }).catch(() => undefined);
+    }
+    remoteVideoStartedRef.current = true;
+    void client.startRemoteVideo({ userId: uid, streamType, view: "family-remote-video" })
+      .then(() => {
+        pushDebug(`远端绑定成功 ${reason}`);
+        // 轮询确认 video 元素真实出现；若没出现说明 SDK 空绑，触发重绑
+        let checks = 0;
+        const confirm = () => {
+          if (remoteVideoInDom()) {
+            setRemoteVideoState("playing");
+            pushDebug(`远端画面已确认 ${reason}`);
+            return;
+          }
+          if (checks < 8) {
+            checks += 1;
+            window.setTimeout(confirm, 250);
+          } else {
+            remoteVideoStartedRef.current = false;
+            ensureRemoteVideo(`空绑重试 ${reason}`);
+          }
+        };
+        window.setTimeout(confirm, 300);
+      })
+      .catch((error: unknown) => {
+        remoteVideoStartedRef.current = false;
+        const msg = String((error as { message?: string })?.message ?? error);
+        if (/already started/i.test(msg)) {
+          // SDK 认为已启动：按 video 元素是否真实出现处理
+          if (remoteVideoInDom()) setRemoteVideoState("playing");
+          else ensureRemoteVideo(`状态重试 ${reason}`);
+          return;
+        }
+        pushDebug(`远端绑定失败(${reason}): ${msg.slice(0, 80)}`);
+        window.setTimeout(() => ensureRemoteVideo(reason), 800);
+      });
+  }
 
   const incoming = deviceRole === "home" && request?.status === "ringing" && request.expiresAt > Date.now();
   const currentCall = sessionRequest ?? request;
@@ -336,30 +416,43 @@ export function FamilyCall({ open, onOpenChange, request, onRequestChange, devic
       if (support && support.result === false) throw new Error("Browser environment is not supported");
       const ticket = await callSecureFamilyFunction<Ticket>("trtc-ticket", { userId });
       ticketUserIdRef.current = userId;
+      remoteUserUidRef.current = userId === HOME_USER_ID ? (call.callerUserId || "") : "";
+      remoteVideoInfoRef.current = null;
+      setRemoteVideoState("waiting");
       const client = trtcSdk.default.create();
       clientRef.current = client;
+      streamTypeMainRef.current = trtcSdk.default.TYPE?.STREAM_TYPE_MAIN ?? "main";
       client.on(trtcSdk.default.EVENT.REMOTE_USER_ENTER, (event: unknown) => {
         const ev = event as { userId: string };
         remoteUserUidRef.current = ev.userId;
         setRemotePresent(true);
         setSessionStatus("active");
+        pushDebug(`对方进房 ${ev.userId}`);
+        // 注意：此时对方几乎必然还没发布视频（对端在接听后手势内才 startLocalVideo），
+        // 立即 startRemoteVideo 会被 SDK 判定“远端未发布”而静默成功 —— 这正是之前黑屏的根因。
+        // 因此只记录 uid，等 REMOTE_VIDEO_AVAILABLE 再绑定。
       });
-      client.on(trtcSdk.default.EVENT.REMOTE_USER_EXIT, () => setRemotePresent(false));
-      // 远端视频事件可能在 DOM 渲染前就到了（enterRoom 后立即触发），这里重试直到 div 出现
+      client.on(trtcSdk.default.EVENT.REMOTE_USER_EXIT, () => {
+        setRemotePresent(false);
+        setRemoteVideoState("waiting");
+        pushDebug("对方离开");
+      });
+      // 远端视频可用：此时对方已真正发布视频，是绑定的唯一正确时机
       client.on(trtcSdk.default.EVENT.REMOTE_VIDEO_AVAILABLE, (event: unknown) => {
-        const ev = event as { userId: string; streamType: number };
-        const tryStart = () => {
-          if (!clientRef.current) return;
-          if (document.getElementById("family-remote-video")) {
-            void clientRef.current.startRemoteVideo({ userId: ev.userId, streamType: ev.streamType, view: "family-remote-video" })
-              .catch((e: unknown) => console.warn("[TRTC] startRemoteVideo failed", e));
-          } else {
-            window.setTimeout(tryStart, 100);
-          }
-        };
-        tryStart();
+        const ev = event as { userId: string; streamType: string };
+        remoteVideoInfoRef.current = { userId: ev.userId, streamType: ev.streamType };
+        pushDebug(`对方开视频 ${ev.userId}/${ev.streamType}`);
+        ensureRemoteVideo("视频事件");
       });
-      client.on(trtcSdk.default.EVENT.ERROR, (error) => setErrorText(readableCallError(error)));
+      client.on(trtcSdk.default.EVENT.REMOTE_VIDEO_UNAVAILABLE, (event: unknown) => {
+        const ev = event as { userId?: string };
+        pushDebug(`对方关视频${ev.userId ? ` ${ev.userId}` : ""}`);
+        setRemoteVideoState("waiting");
+      });
+      client.on(trtcSdk.default.EVENT.ERROR, (error) => {
+        setErrorText(readableCallError(error));
+        pushDebug(`错误 ${String((error as { message?: string })?.message ?? error).slice(0, 60)}`);
+      });
       await client.enterRoom({ roomId: call.roomId, sdkAppId: ticket.sdkAppId, userId: ticket.userId, userSig: ticket.userSig });
       await client.startLocalAudio();
       setSessionStatus(waitingForAnswer ? "waiting" : "active");
@@ -368,40 +461,27 @@ export function FamilyCall({ open, onOpenChange, request, onRequestChange, devic
     }
   }
 
-  // sessionStatus 变成 active / waiting 后，视频 DOM 已渲染——启动本地视频 + 手动兜底远端视频
+  // sessionStatus 变成 active / waiting 后，视频 DOM 已渲染——启动本地视频 + 补绑远端视频
   useEffect(() => {
     if (sessionStatus !== "active" && sessionStatus !== "waiting") return;
     const client = clientRef.current;
     if (!client || !currentCall || currentCall.mode !== "video") return;
+    let localTries = 0;
     const tryStartLocal = () => {
+      if (!clientRef.current) return;
       if (document.getElementById("family-local-video")) {
         void client.startLocalVideo({ view: "family-local-video", option: { profile: "360p", useFrontCamera: true } })
-          .catch(() => { /* 摄像头权限被拒等，不影响语音 */ });
-      } else {
+          .then(() => pushDebug("本机摄像头已开"))
+          .catch((error: unknown) => pushDebug(`本机摄像头失败: ${String((error as { message?: string })?.message ?? error).slice(0, 50)}`));
+      } else if (localTries < 15) {
+        localTries += 1;
         window.setTimeout(tryStartLocal, 80);
       }
     };
     tryStartLocal();
-
-    // 兜底：REMOTE_VIDEO_AVAILABLE 事件可能不触发（SDK 兼容性问题），
-    // 接通后延迟 1.5s 主动用已知的远端 userId 调 startRemoteVideo
-    const remoteUid = currentCall.callerUserId === ticketUserIdRef.current
-      ? null  // 自己是主叫，远端 ID 未知（等 REMOTE_USER_ENTER 事件）
-      : currentCall.callerUserId;  // 自己是被叫，远端就是主叫
-    const retryRemote = () => {
-      if (!clientRef.current) return;
-      const el = document.getElementById("family-remote-video");
-      if (!el) { window.setTimeout(retryRemote, 200); return; }
-      // 尝试用 call 里的远端 userId 直接订阅
-      const uid = remoteUid ?? remoteUserUidRef.current;
-      if (uid) {
-        void clientRef.current.startRemoteVideo({ userId: uid, streamType: 0, view: "family-remote-video" })
-          .then(() => { /* 成功 */ })
-          .catch((e: unknown) => console.warn("[TRTC] fallback startRemoteVideo failed", e));
-      }
-    };
-    const timer = window.setTimeout(retryRemote, 1500);
-    return () => window.clearTimeout(timer);
+    // 若对方在进房前就已发布视频（事件先于监听注册的极端情况），DOM 就绪后补一次绑定
+    ensureRemoteVideo("接通补绑");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionStatus, currentCall?.mode]);
 
   async function startCall(mode: "audio" | "video") {
@@ -466,6 +546,9 @@ export function FamilyCall({ open, onOpenChange, request, onRequestChange, devic
       client.destroy();
     }
     if (updateSignal && currentCall) await onRequestChange({ ...currentCall, status: "ended" }).catch(() => undefined);
+    setRemoteVideoState("waiting");
+    remoteVideoStartedRef.current = false;
+    remoteVideoInfoRef.current = null;
     setRemotePresent(false);
     setSessionRequest(null);
     setErrorText(message);
@@ -502,8 +585,12 @@ export function FamilyCall({ open, onOpenChange, request, onRequestChange, devic
         {incoming && !inSession && request && <section className="incoming-call"><div className="incoming-call-pulse">{request.mode === "video" ? "▣" : "☎"}</div><h3>{request.callerName}正在呼叫家里</h3><p>{request.mode === "video" ? "视频通话" : "语音通话"} · 接听后才会开启{request.mode === "video" ? "摄像头和麦克风" : "麦克风"}</p><div><button className="decline-call" type="button" onClick={() => void declineCall()}>拒绝</button><button className="accept-call" type="button" onClick={() => void acceptCall()}>接听</button></div>{ringerBlocked && <button className="ringer-unlock" type="button" onClick={enableRingerManually}>🔊 没听到铃声？轻点开启</button>}{errorText && <p className="call-error">{errorText}</p>}</section>}
 
         {inSession && currentCall && <section className={`active-call ${currentCall.mode}`}>
-          <div className="call-video-stage"><div id="family-remote-video" className="remote-video"><span>{remotePresent ? "正在连接画面…" : sessionStatus === "waiting" ? "正在呼叫家里…" : "等待对方进入…"}</span></div>{currentCall.mode === "video" && <div id="family-local-video" className="local-video"><span>本机画面</span></div>}</div>
+          <div className="call-video-stage"><div id="family-remote-video" className={`remote-video${remoteVideoState === "playing" ? " playing" : ""}`}><span className="remote-placeholder">{remotePresent ? "正在连接画面…" : sessionStatus === "waiting" ? "正在呼叫家里…" : "等待对方进入…"}</span></div>{currentCall.mode === "video" && <div id="family-local-video" className="local-video"><span>本机画面</span></div>}</div>
           <div className="call-live-status"><i /><div><strong>{sessionStatus === "joining" ? "正在建立安全连接" : sessionStatus === "waiting" ? "客厅 iPad 正在响铃" : remotePresent ? "通话中" : "已接听，等待画面"}</strong><small>{currentCall.mode === "video" ? "摄像头和麦克风已开启" : "麦克风已开启"}</small></div></div>
+          {debugLines.length > 0 && <div className="call-debug">
+            <button type="button" onClick={() => setShowDebug((v) => !v)}>{showDebug ? "隐藏连接诊断" : "画面不出来？点这里看原因"}</button>
+            {showDebug && <pre>{debugLines.join("\n")}</pre>}
+          </div>}
           {errorText && <p className="call-error">{errorText}</p>}
           <button className="hangup-call" type="button" onClick={() => void leaveRoom()}>■ 结束通话</button>
         </section>}

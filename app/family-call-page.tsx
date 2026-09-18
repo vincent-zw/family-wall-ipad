@@ -158,13 +158,18 @@ export function FamilyCallPage() {
     });
     client.on(trtcSdk.default.EVENT.REMOTE_USER_EXIT, () => setRemoteJoined(false));
     client.on(trtcSdk.default.EVENT.REMOTE_VIDEO_AVAILABLE, (event: unknown) => {
-      const ev = event as { userId: string; streamType: number };
+      const ev = event as { userId: string; streamType: string };
+      console.log("[TRTC] guest remote video available", ev.userId, ev.streamType);
       // 视频 DOM 可能还没渲染（calling 阶段对方先到了），等 DOM 就绪再调
+      let attempts = 0;
       const tryStart = () => {
         if (!clientRef.current) return;
         if (document.getElementById("guest-remote-video")) {
-          void clientRef.current.startRemoteVideo({ userId: ev.userId, streamType: ev.streamType, view: "guest-remote-video" });
-        } else {
+          void clientRef.current.startRemoteVideo({ userId: ev.userId, streamType: ev.streamType, view: "guest-remote-video" })
+            .then(() => console.log("[TRTC] guest remote video bound"))
+            .catch((error: unknown) => console.warn("[TRTC] guest startRemoteVideo failed", error));
+        } else if (attempts < 30) {
+          attempts += 1;
           window.setTimeout(tryStart, 100);
         }
       };
@@ -173,31 +178,36 @@ export function FamilyCallPage() {
     client.on(trtcSdk.default.EVENT.ERROR, () => setErrorLine("通话连接出了点问题，请重新呼叫。"));
     await client.enterRoom({ roomId: call.roomId, sdkAppId: ticket.sdkAppId, userId: ticket.userId, userSig: ticket.userSig });
     await client.startLocalAudio();
-    // startLocalVideo 必须等 DOM 里有 #guest-local-video（talking 阶段才渲染），
-    // 这里只进房间 + 开音频，视频延后到下面的 useEffect 里调
+    // 关键：进入房间的手势上下文内立即启动摄像头并发布视频。
+    // 之前这里只开音频、视频延后到 iPad 接听后的 useEffect，导致 iPad 进房时本端还没发布视频，
+    // 而 iPad 端 startRemoteVideo 会在“远端未发布”时静默成功，造成 iPad 永远等不到画面。
+    let localTries = 0;
+    const tryStartLocal = () => {
+      if (!clientRef.current) return;
+      if (document.getElementById("guest-local-video")) {
+        void clientRef.current.startLocalVideo({ view: "guest-local-video", option: { profile: "360p", useFrontCamera: true } })
+          .then(() => console.log("[TRTC] guest local video published"))
+          .catch((error: unknown) => console.warn("[TRTC] guest startLocalVideo failed", error));
+      } else if (localTries < 30) {
+        localTries += 1;
+        window.setTimeout(tryStartLocal, 100);
+      }
+    };
+    tryStartLocal();
   }, []);
 
-  // talking 阶段视频 DOM 已就绪：启动本地视频 + 补播可能已错过的远端视频
+  // 视频 DOM 在 calling 阶段就渲染（不随 talking 卸载重建），本地视频已在 joinRoom 手势内启动。
+  // 这里只兜底：如果 talking 阶段本地视频因故没启动，再补一次；并补绑可能已到达的远端视频。
   useEffect(() => {
     if (phase !== "talking") return;
     const client = clientRef.current;
     if (!client) return;
-    if (callRef.current?.mode !== "video") return;
-    const tryStartLocal = () => {
-      if (document.getElementById("guest-local-video")) {
-        void client.startLocalVideo({ view: "guest-local-video", option: { profile: "360p", useFrontCamera: true } })
-          .catch(() => { /* 摄像头权限被拒等情况，不影响语音通话 */ });
-      } else {
-        window.setTimeout(tryStartLocal, 80);
-      }
-    };
-    tryStartLocal();
-    // 远端视频如果在 calling 阶段就到了，上面的 tryStart 已排好重试；这里再兜底一次
-    window.setTimeout(() => {
-      if (clientRef.current && document.getElementById("guest-remote-video")) {
-        // SDK 会自动绑定已到达的远端流，无需额外参数
-      }
-    }, 400);
+    const el = document.getElementById("guest-local-video");
+    if (el && !el.querySelector("video")) {
+      void client.startLocalVideo({ view: "guest-local-video", option: { profile: "360p", useFrontCamera: true } })
+        .then(() => console.log("[TRTC] guest local video re-published"))
+        .catch((error: unknown) => console.warn("[TRTC] guest startLocalVideo retry failed", error));
+    }
   }, [phase]);
 
   const startCall = useCallback(async () => {
@@ -307,18 +317,18 @@ export function FamilyCallPage() {
           {statusLine && <p className="callpage-status">{statusLine}</p>}
         </>
       )}
+      {(phase === "calling" || phase === "talking") && (
+        <div className={`callpage-video-stage ${phase === "calling" ? "callpage-stage-calling" : ""}`}>
+          <div id="guest-remote-video" className="callpage-remote-video" />
+          <div id="guest-local-video" className="callpage-local-video" />
+          {phase === "calling" && <div className="callpage-calling-mask"><div className="callpage-pulse"><span /><span /><span /></div><p className="callpage-calling-text">正在呼叫家里…</p></div>}
+        </div>
+      )}
       {phase === "calling" && (
-        <>
-          <div className="callpage-pulse"><span /><span /><span /></div>
-          <button className="callpage-big-red" type="button" onClick={hangUp}>✕<span>不打了</span></button>
-        </>
+        <button className="callpage-big-red" type="button" onClick={hangUp}>✕<span>不打了</span></button>
       )}
       {phase === "talking" && (
         <>
-          <div className="callpage-video-stage">
-            <div id="guest-remote-video" className="callpage-remote-video" />
-            <div id="guest-local-video" className="callpage-local-video" />
-          </div>
           <p className="callpage-talking">{remoteJoined ? "通话中" : "正在接通…"}</p>
           <button className="callpage-big-red" type="button" onClick={hangUp}>✕<span>挂断</span></button>
         </>
