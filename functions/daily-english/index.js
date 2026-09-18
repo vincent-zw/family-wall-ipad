@@ -70,7 +70,7 @@ async function synthesizeProgram(program) {
       status: "ready",
       voiceName: "WeRose",
       playbackRate: 1,
-      version: 4,
+      version: 5,
       generatedAt: Date.now(),
       chapters: generated,
     },
@@ -86,8 +86,8 @@ async function ensurePrograms(start = new Date(), days = 8) {
     const date = new Date(start.getFullYear(), start.getMonth(), start.getDate() + offset);
     const key = dateKey(date);
     const existing = byDate.get(key);
-    let program = existing?.contentVersion === 4 ? existing : buildProgram(key, Number(existing?.variant || 0));
-    const needsAudio = offset <= 1 && (program.audio?.status !== "ready" || program.audio?.version !== 4);
+    let program = existing?.contentVersion === 5 ? existing : buildProgram(key, Number(existing?.variant || 0));
+    const needsAudio = offset <= 1 && (program.audio?.status !== "ready" || program.audio?.version !== 5);
     if (needsAudio) {
       try {
         program = await synthesizeProgram(program);

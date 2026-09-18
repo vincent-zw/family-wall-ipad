@@ -178,6 +178,10 @@ export function buildMorningSession(date: Date, lesson: DashboardLesson, complet
   const story = stories[absoluteDay % stories.length];
   const activeWords = wordPack.words.slice(0, wordCount);
   const wordPreview = activeWords.map(([word]) => word).join(". ");
+  // 开头中文预告：逐词英文 + 中文意思
+  const chinesePreview = activeWords
+    .map(([word, meaning], index) => `第${index + 1}个，${word}，意思是${meaning}`)
+    .join("。");
   const vocabularySegments = activeWords.map(([word, , example], index) =>
     segment(`word-${index}-english`, "初中核心单词", "全家", "en-US", `Word number ${index + 1}. ${word}. ${word}. ${example} Once again. ${word}. ${example}`, 700),
   );
@@ -186,9 +190,9 @@ export function buildMorningSession(date: Date, lesson: DashboardLesson, complet
   const shortStoryHint = `${story.explanation.split("。")[0]}。`;
 
   const sequence = [
-    segment("welcome", "早餐英语电台", "全家", "zh-CN", `早餐英语开始。先听今天的${wordCount}个常用单词。`, 250),
+    segment("word-preview", "今日单词预告", "全家", "zh-CN", `早餐英语开始。今天要学习${wordCount}个常用单词。${chinesePreview}。先听一遍发音，等会儿再记意思。`, 700),
     segment("opening", "英文开场", "全家", "en-US", "Good morning, Yicheng and Yiran. Today's English starts now.", 350),
-    segment("word-preview", "今日单词预告", "全家", "en-US", `Today's vocabulary theme is ${wordPack.theme}. Listen to the words first. ${wordPreview}.`, 850),
+    segment("word-intro", "英文单词预告", "全家", "en-US", `Today's vocabulary theme is ${wordPack.theme}. Listen to the words first. ${wordPreview}.`, 850),
     ...vocabularySegments,
     segment("word-meanings", "单词词义", "全家", "zh-CN", meaningReview, 500),
     segment("word-review", "单词例句连听", "全家", "en-US", exampleReview, 900),

@@ -877,7 +877,7 @@ export function FamilyDashboard() {
   const activeAudioSections = activeAudioProgram ? activeAudioProgram.audio.chapters.reduce<Array<{ index: number; section: string; title: string }>>((sections, chapter, index) => {
     const section = chapter.section ?? chapter.id.split("-")[0];
     if (!sections.some((item) => item.section === section)) {
-      const titles: Record<string, string> = { opening: "开场", words: "单词", story: "短文", explanation: "中文提示", dialogue: "对话", review: "回顾" };
+      const titles: Record<string, string> = { preview: "预告", opening: "开场", words: "单词", story: "短文", explanation: "中文提示", dialogue: "对话", review: "回顾" };
       sections.push({ index, section, title: titles[section] ?? chapter.title });
     }
     return sections;
@@ -2599,7 +2599,16 @@ export function FamilyDashboard() {
             <strong>{playbackTime(activeAudioElapsed)} / {playbackTime(activeAudioDuration)}</strong>
           </header>
           <div className={`morning-program-focus ${currentMorningSection}`}>
-            {currentMorningSection === "words" && activeMorningWord ? <div className="morning-live-word">
+            {currentMorningSection === "preview" ? <div className="morning-live-preview">
+              <small>TODAY&apos;S WORDS · 今日要学的单词</small>
+              <div className="morning-preview-list">
+                {activeAudioProgram.words.slice(0, 4).map((item, index) => <article key={item.word} className={index === 0 ? "first" : ""}>
+                  <span className="preview-index">{index + 1}</span>
+                  <strong>{item.word}</strong>
+                  <b>{item.meaning}</b>
+                </article>)}
+              </div>
+            </div> : currentMorningSection === "words" && activeMorningWord ? <div className="morning-live-word">
               <small>WORD {activeMorningWordIndex + 1} / 4</small>
               <strong>{activeMorningWord.word}</strong>
               <em>{activeMorningWord.phonetic}</em>

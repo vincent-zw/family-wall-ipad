@@ -123,6 +123,12 @@ function libraryIndex(date: Date) {
   return Math.abs(Math.floor(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / 86400000)) % LESSON_LIBRARY.length;
 }
 
+// 科普独立索引：按科普库自身长度取模。之前和英语共用 14 的模，
+// 导致 75 条科普库只有前 14 条能被轮到、两周就重复
+function scienceIndex(date: Date) {
+  return Math.abs(Math.floor(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / 86400000)) % SCIENCE_LIBRARY.length;
+}
+
 export const SCIENCE_LIBRARY_VERSION = 2;
 
 export function ensureContentHorizon(existing: DailyContent[], start = new Date(), days = 14) {
@@ -138,7 +144,7 @@ export function ensureContentHorizon(existing: DailyContent[], start = new Date(
       id: current?.id ?? `library-${key}`,
       date: key,
       english: current?.english ?? LESSON_LIBRARY[index],
-      science: SCIENCE_LIBRARY[index],
+      science: SCIENCE_LIBRARY[scienceIndex(date)],
       source: current?.source ?? "library",
       updatedAt: Date.now(),
     });

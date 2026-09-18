@@ -179,7 +179,7 @@ function buildProgram(key, variant = 0) {
     status: "ready",
     source: "cloud-library",
     variant,
-    contentVersion: 4,
+    contentVersion: 5,
     theme: template.theme,
     words,
     storyTitle: template.storyTitle,
@@ -201,6 +201,10 @@ function buildProgram(key, variant = 0) {
 
 function programTextChapters(program) {
   const wordPreview = program.words.map((item) => item.word).join(". ");
+  // 开头中文预告：逐词播报英文 + 中文意思，让孩子先知道今天学什么
+  const chinesePreview = program.words
+    .map((item, index) => `第${index + 1}个，${item.word}，意思是${item.meaning}`)
+    .join("。");
   const vocabulary = program.words.map((item, index) => ({
     id: `word-${index + 1}`,
     title: `核心单词 ${index + 1} · ${item.word}`,
@@ -212,6 +216,7 @@ function programTextChapters(program) {
   const review = program.words.map((item) => `${item.word}. ${item.example}`).join(" ");
   const chineseMeanings = program.words.map((item) => `${item.word}，${item.meaning}`).join("；");
   return [
+    { id: "word-preview", title: "今日单词预告", section: "preview", language: "zh", text: `早餐英语开始。今天要学习${program.words.length}个单词。${chinesePreview}。先听一遍发音，等会儿再记意思。` },
     { id: "opening", title: "英文开场", section: "opening", language: "en", text: `Good morning, Yicheng and Yiran. Welcome to breakfast English. Today's theme is ${program.theme}. Our four words are ${wordPreview}. Listen, enjoy your breakfast, and do not worry about remembering everything at once.` },
     ...vocabulary,
     { id: "word-meaning", title: "四词中文提示", section: "explanation", language: "zh", text: `四个词的意思是：${chineseMeanings}。接下来听生活短文。` },

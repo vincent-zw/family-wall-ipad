@@ -43,14 +43,49 @@ async function fetchJson(url) {
   return response.json();
 }
 
+async function fetchText(url) {
+  const response = await fetch(url, { headers: { "User-Agent": "FamilyWall/1.0 (children daily briefing)" }, signal: AbortSignal.timeout(12000) });
+  if (!response.ok) throw new Error(`source ${response.status}`);
+  return response.text();
+}
+
+function stripHtml(text) {
+  return String(text || "")
+    .replace(/<!\[CDATA\[|\]\]>/g, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&quot;/g, "\"")
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 async function collectSources(date) {
   const sources = [];
   const tasks = [
-    fetchJson("https://api.spaceflightnewsapi.net/v4/articles/?limit=5&ordering=-published_at").then((data) => {
-      for (const item of (data.results || []).slice(0, 4)) sources.push({ title: item.title, summary: item.summary || "", url: item.url, provider: item.news_site || "Spaceflight News" });
+    fetchText("https://www.solidot.org/index.rss").then((xml) => {
+      const items = xml.split("<item>").slice(1);
+      for (const raw of items.slice(0, 4)) {
+        const title = stripHtml(raw.match(/<title>([\s\S]*?)<\/title>/)?.[1]);
+        const description = stripHtml(raw.match(/<description>([\s\S]*?)<\/description>/)?.[1]).slice(0, 160);
+        if (title) sources.push({ title, summary: description, url: "https://www.solidot.org/", provider: "Solidot科技" });
+      }
+    }),
+    fetchJson("https://hn.algolia.com/api/v1/search?tags=front_page&hitsPerPage=6").then((data) => {
+      for (const item of (data.hits || []).slice(0, 3)) {
+        if (!item.title) continue;
+        let domain = "";
+        try { domain = new URL(item.url).hostname.replace(/^www\./, ""); } catch {}
+        sources.push({ title: item.title, summary: domain ? `文章来自 ${domain}` : "", url: item.url || "https://news.ycombinator.com/", provider: "HackerNews前沿科技" });
+      }
+    }),
+    fetchJson("https://api.spaceflightnewsapi.net/v4/articles/?limit=3&ordering=-published_at").then((data) => {
+      for (const item of (data.results || []).slice(0, 2)) sources.push({ title: item.title, summary: item.summary || "", url: item.url, provider: item.news_site || "Spaceflight News" });
     }),
     fetchJson("https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/significant_week.geojson").then((data) => {
-      for (const item of (data.features || []).slice(0, 3)) sources.push({ title: item.properties?.title || "地理事件", summary: item.properties?.place || "", url: item.properties?.url || "https://earthquake.usgs.gov/", provider: "USGS" });
+      for (const item of (data.features || []).slice(0, 1)) sources.push({ title: item.properties?.title || "地理事件", summary: item.properties?.place || "", url: item.properties?.url || "https://earthquake.usgs.gov/", provider: "USGS地理" });
     }),
     fetchJson(`https://api.wikimedia.org/feed/v1/wikipedia/zh/onthisday/all/${String(date.getMonth() + 1).padStart(2, "0")}/${String(date.getDate()).padStart(2, "0")}`).then((data) => {
       for (const item of (data.events || []).slice(0, 5)) {
@@ -60,7 +95,7 @@ async function collectSources(date) {
     }),
   ];
   await Promise.allSettled(tasks);
-  return sources.filter((item) => item.title && item.url).slice(0, 6);
+  return sources.filter((item) => item.title && item.url).slice(0, 8);
 }
 
 function cleanJson(text) {
@@ -69,16 +104,17 @@ function cleanJson(text) {
   return JSON.parse(match[0]);
 }
 
-async function makeScript(date, sources) {
+async function makeScript(date, sources, recentTitles = []) {
   if (sources.length === 0) throw new Error("今日公开来源暂时不可用");
   const ai = app.ai();
   const model = ai.createModel("cloudbase");
-  const material = sources.slice(0, 5).map((item, index) => `${index + 1}.[${item.provider}]${String(item.title).slice(0, 120)}；${String(item.summary || "").slice(0, 100)}`).join("\n");
+  const material = sources.slice(0, 7).map((item, index) => `${index + 1}.[${item.provider}]${String(item.title).slice(0, 120)}；${String(item.summary || "").slice(0, 100)}`).join("\n");
+  const recentLine = recentTitles.length ? `最近几天已播报过：${recentTitles.join("；")}。选题不要与它们重复或高度相似。` : "";
   const response = await model.generateText({
     model: "hy3",
     messages: [{
       role: "user",
-      content: `${dateKey(date)}儿童晚餐新闻。仅依据材料选2至3条科技/太空、自然地理或历史内容，事实准确、语气有趣，回避暴力政治广告；解释一个词，结尾提一个家庭问题。维基材料称“历史上的今天”。写600至680汉字、约3分钟。只返回JSON：{"title":"标题","summary":"55字内","script":"播报稿","sourceIndexes":[1,2,3]}。\n${material}`,
+      content: `${dateKey(date)}儿童晚餐科普新闻。仅依据材料选3至4条，主题从最新科技、人工智能、自然地理、太空、历史科普中挑选，优先选孩子感兴趣、有科普价值、能讲明白原理的内容；选出的几条主题尽量互相不同。事实准确、语气有趣，回避暴力政治广告；每条讲清一个知识点，解释一个词，结尾提一个家庭问题。维基材料称“历史上的今天”。英文材料翻译成中文再讲。${recentLine}写750至850汉字、约4分钟。只返回JSON：{"title":"标题","summary":"55字内","script":"播报稿","sourceIndexes":[1,2,3,4]}。\n${material}`,
     }],
   });
   const generated = cleanJson(response.text);
@@ -138,12 +174,16 @@ async function readPrograms() {
   }
 }
 
-async function prepareDate(date) {
+async function prepareDate(date, existing = []) {
   const key = dateKey(date);
   const interaction = interactionForDate(date);
   const collected = await collectSources(date);
+  const recentTitles = existing
+    .filter((item) => item.status === "ready" && item.newsTitle)
+    .slice(-5)
+    .map((item) => item.newsTitle);
   try {
-    const news = await makeScript(date, collected);
+    const news = await makeScript(date, collected, recentTitles);
     return await synthesize({ id: `dinner-${key}`, date: key, status: "ready", interaction, ...news, preparedAt: Date.now(), audio: { status: "pending", durationSeconds: 0, chapters: [] } });
   } catch (error) {
     console.error("daily-dinner generation error", error);
@@ -153,8 +193,8 @@ async function prepareDate(date) {
 
 exports.main = async (event = {}) => {
   const target = /^\d{4}-\d{2}-\d{2}$/.test(event.date || "") ? dateFromKey(event.date) : new Date();
-  const program = await prepareDate(target);
   const existing = await readPrograms();
+  const program = await prepareDate(target, existing);
   const programs = [...existing.filter((item) => item.date !== program.date && item.date >= dateKey(new Date(target.getFullYear(), target.getMonth(), target.getDate() - 2))), program]
     .sort((a, b) => a.date.localeCompare(b.date)).slice(-10);
   await db.collection("family_dinner").doc(INDEX_ID).set({ programs, updatedAt: Date.now() });

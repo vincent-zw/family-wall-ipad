@@ -10,7 +10,7 @@ export type MorningProgramWord = {
 export type MorningAudioChapter = {
   id: string;
   title: string;
-  section?: "opening" | "words" | "story" | "explanation" | "dialogue" | "review";
+  section?: "preview" | "opening" | "words" | "story" | "explanation" | "dialogue" | "review";
   wordIndex?: number;
   cloudPath: string;
   audioUrl?: string;
@@ -51,11 +51,14 @@ function segment(id: string, title: string, language: MorningSegment["language"]
 
 export function buildMorningSessionFromProgram(program: MorningProgram): MorningSegment[] {
   const preview = program.words.map((item) => item.word).join(". ");
+  const previewMeanings = program.words
+    .map((item, index) => `第${index + 1}个，${item.word}，意思是${item.meaning}`)
+    .join("。");
   const vocabulary = program.words.map((item, index) => `Word number ${index + 1}. ${item.word}. ${item.word}. ${item.example} Once again. ${item.word}. ${item.example}`).join(" ");
   const meanings = program.words.map((item) => `${item.word}，${item.meaning}`).join("；");
   const review = program.words.map((item) => `${item.word}. ${item.example}`).join(" ");
   return [
-    segment("welcome", "早餐英语电台", "zh-CN", "早餐英语开始。今天以英文听力为主。", 250),
+    segment("word-preview", "今日单词预告", "zh-CN", `早餐英语开始。今天要学习${program.words.length}个单词。${previewMeanings}。先听一遍发音，等会儿再记意思。`, 600),
     segment("opening", "英文开场", "en-US", `Good morning, Yicheng and Yiran. Today's English theme is ${program.theme}. Listen to the words first. ${preview}.`, 500),
     segment("words", "核心单词", "en-US", vocabulary, 700),
     segment("meanings", "单词词义", "zh-CN", meanings, 450),
